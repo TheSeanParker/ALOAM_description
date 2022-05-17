@@ -20,6 +20,7 @@ struct LidarEdgeFactor
 	/*******************************************************************/
 	/************下面两行最主要的作用是传入点一个点和两个线点******************/
 	/******************************************************************/
+	//计算点到直线的距离作为误差函数
 	LidarEdgeFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d last_point_a_,Eigen::Vector3d last_point_b_, double s_)
 		            : curr_point(curr_point_)
 					, last_point_a(last_point_a_)
@@ -90,7 +91,7 @@ struct LidarEdgeFactor
 		Eigen::Matrix<T, 3, 1> nu = (lp - lpa).cross(lp - lpb);//叉乘后是3点所在平面的法向量
 		//上面标识符各自含义是lpa：last point a; lp:last point
 		Eigen::Matrix<T, 3, 1> de = lpa - lpb;//模是底边的长度
-        //Eigen是通过重载C++操作运算符通过dot（）、cross（）等来实现矩阵/向量的操作运算符
+        //Eigen是通过重载C++操作运算符通过dot()、cross()等来实现矩阵/向量的操作运算符
 		//向量的点乘也叫向量的内积、数量积，对两个向量执行点乘运算，就是将两个向量对应一一相乘之后求和的操作，点乘结果是标量
 		//叉乘又叫向量积、外积、叉集、叉乘的运算结果是一个向量而不是一个标量。两个向量的叉积与这两个向量组成的坐标平面垂直
 		residual[0] = nu.x() / de.norm();//残差的x坐标
@@ -101,9 +102,10 @@ struct LidarEdgeFactor
 		//需要注意的是,所有的redisual都不用加fabs,因为ceres内部会对其求平方,作为最终的残差项
 		return true;
 	}
-    //下面是函数指针,返回结果是ceres::CostFunction *类对象类型的指针
-static ceres::CostFunction* Create(const Eigen::Vector3d curr_point_, const Eigen::Vector3d last_point_a_, 
-                                   const Eigen::Vector3d last_point_b_, const double s_)
+    //类内静态成员函数;
+	//下面是函数指针,返回结果是ceres::CostFunction *类对象类型的指针
+	static ceres::CostFunction* Create(const Eigen::Vector3d curr_point_,   const Eigen::Vector3d last_point_a_, 
+									   const Eigen::Vector3d last_point_b_, const double s_)
 	{
 		return (new ceres::AutoDiffCostFunction<LidarEdgeFactor, 3, 4, 3>(new LidarEdgeFactor(curr_point_, last_point_a_, last_point_b_, s_)));
 		//&取函数地址,new指针,堆只能用指针去存储地址间接存储数据//第一个LidarEdgeFactor是类,要求后面传入的指针类型是LidarEdgeFactor
@@ -115,6 +117,7 @@ struct LidarPlaneFactor
 	/*******************************************************************/
 	/************下面两行最主要的作用是传入1个独立点和3个面点*****************/
 	/******************************************************************/
+	//(1)类内的构造函数
 	LidarPlaneFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d last_point_j_,
 					 Eigen::Vector3d last_point_l_, Eigen::Vector3d last_point_m_, double s_)
 		           : curr_point(curr_point_), last_point_j(last_point_j_),
@@ -124,7 +127,7 @@ struct LidarPlaneFactor
 		ljm_norm.normalize();//相当于处于abs(last_point_j - last_point_l)*abs(last_point_j - last_point_m)；
 		//上面得出的是单位法向量
 	}
-
+    //(2)类内的操作符重载函数
 	template <typename T>//函数模板
 	bool operator()(const T *q, const T *t, T *residual) const
 	{
@@ -147,15 +150,16 @@ struct LidarPlaneFactor
 
 		return true;
 	}
-
+    //(3)类内其他函数
 	static ceres::CostFunction *Create(const Eigen::Vector3d curr_point_, const Eigen::Vector3d last_point_j_,
 									   const Eigen::Vector3d last_point_l_, const Eigen::Vector3d last_point_m_,
 									   const double s_)
 	{
-		return (new ceres::AutoDiffCostFunction<LidarPlaneFactor, 1, 4, 3>(
+		return (new ceres::AutoDiffCostFunction<LidarPlaneFactor, 1, 4, 3>(//模板重载函数
 			new LidarPlaneFactor(curr_point_, last_point_j_, last_point_l_, last_point_m_, s_)));
 	}
-
+	//类内的成员变量
+    private:
 	Eigen::Vector3d curr_point, last_point_j, last_point_l, last_point_m;
 	Eigen::Vector3d ljm_norm;
 	double s;
@@ -183,7 +187,7 @@ struct LidarPlaneNormFactor
 		return true;
 	}
 
-	static ceres::CostFunction *Create(const Eigen::Vector3d curr_point_, const Eigen::Vector3d plane_unit_norm_,
+	static ceres::CostFunction* Create(const Eigen::Vector3d curr_point_, const Eigen::Vector3d plane_unit_norm_,
 									   const double negative_OA_dot_norm_)
 	{
 		return (new ceres::AutoDiffCostFunction<LidarPlaneNormFactor, 1, 4, 3>(

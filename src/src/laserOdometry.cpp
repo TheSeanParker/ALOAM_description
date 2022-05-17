@@ -409,7 +409,6 @@ int main(int argc, char **argv)
                                 // if not in nearby scans, end the loop
                                 if (int(laserCloudCornerLast->points[j].intensity) < (closestPointScanID - NEARBY_SCAN))
                                     break;//break将会跳过整个for循环，并执行for循环以后的内容
-
                                     double pointSqDis = (laserCloudCornerLast->points[j].x - pointSel.x) *
                                                         (laserCloudCornerLast->points[j].x - pointSel.x) +
                                                             (laserCloudCornerLast->points[j].y - pointSel.y) *
@@ -449,7 +448,8 @@ int main(int argc, char **argv)
                             else
                                 s = 1.0;
                             // 先去理解上面的curr_point last_point_a last_point_b 三者的来历至关重要，首先要还原问题本身是什么
-                            // 答：上面的3个量，分别是当前祯的当前点和上一祯的两个线点  
+                            // 答：上面的3个量，分别为当前祯的当前点和上一祯的两个线点  
+                            //下面的cost_function是指针的名称而已，类型是ceres::CostFunction的指针
                             ceres::CostFunction* cost_function = LidarEdgeFactor::Create(curr_point, last_point_a, last_point_b, s);
                             //上面是通用模板库？，构建求解非线性最小二乘的方程，上面函数是为了构建线点的约束和优化
                             std::cout<<"Before Output para_q="<<para_q<<std::endl;
@@ -468,8 +468,9 @@ int main(int argc, char **argv)
                         //void TransformToStart(PointType const *const pi, PointType *const po)//形参
                         //在上一帧所有角点构成的kdtree里面寻找当前帧最近的一个点,nearestKSearch是kdtreeSurfLast下面的子函数
                         //在pointSel点集里面找到1个点
+                        //跟线点的处理方式是类似的，根据这一祯的位姿增量进行粗略祛除畸变
                         kdtreeSurfLast->nearestKSearch(pointSel, 1, pointSearchInd, pointSearchSqDis);
-
+                        //然后找到3个最近点，计算到这3个点拟合成平面的距离，作为误差函数
                         int closestPointInd = -1, minPointInd2 = -1, minPointInd3 = -1;
                         //只有小于给定的门限值才被认为是有效的
                         if (pointSearchSqDis[0] < DISTANCE_SQ_THRESHOLD)
@@ -618,6 +619,7 @@ int main(int argc, char **argv)
     //transform corner features and plane features to the scan end point
     //下面这段无效的本质是，kitti已经处理过了运动畸变，因此没有此功能，如果是其他未去除畸变的数据，可以改成if(1)来启用，
     //**将当前祯点云转到当前祯结尾的时刻（即下一祯开始时刻）**//
+    //求得R和t以后，顺带将这一祯转到当前时刻，作为下一祯的参考祯
             if(0)
             {
                 int cornerPointsLessSharpNum = cornerPointsLessSharp->points.size();
@@ -655,7 +657,7 @@ int main(int argc, char **argv)
             //经过了一次处理以后,然后将当前帧送到kdtree用于下一帧的匹配对的寻找
             //if(!systemInited) 语句非常巧妙地将第一祯数据，放弃此if(!systemInited)对应else语句处理，直接给到了下面的setInputCloud语句
             //所以带Last关键词的标识符，永远会超前一祯周期
-            kdtreeCornerLast->setInputCloud(laserCloudCornerLast);
+            kdtreeCornerLast->setInputCloud(laserCloudCornerLast);//构建kd树，用来寻找最近点
             kdtreeSurfLast->setInputCloud(laserCloudSurfLast);
 
             if (frameCount % skipFrameNum == 0)//求余数,就是经降频发送出去
