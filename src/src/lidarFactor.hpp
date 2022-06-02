@@ -118,10 +118,8 @@ struct LidarPlaneFactor
 	/************下面两行最主要的作用是传入1个独立点和3个面点*****************/
 	/******************************************************************/
 	//(1)类内的构造函数
-	LidarPlaneFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d last_point_j_,
-					 Eigen::Vector3d last_point_l_, Eigen::Vector3d last_point_m_, double s_)
-		           : curr_point(curr_point_), last_point_j(last_point_j_),
-				     last_point_l(last_point_l_),   last_point_m(last_point_m_),    s(s_)
+	LidarPlaneFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d last_point_j_,Eigen::Vector3d last_point_l_, Eigen::Vector3d last_point_m_, double s_)
+		           : curr_point(curr_point_),last_point_j(last_point_j_),last_point_l(last_point_l_),last_point_m(last_point_m_),s(s_)
 	{
 		ljm_norm = (last_point_j - last_point_l).cross(last_point_j - last_point_m);//得出在此平面的法向量
 		ljm_norm.normalize();//相当于处于abs(last_point_j - last_point_l)*abs(last_point_j - last_point_m)；

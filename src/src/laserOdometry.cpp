@@ -100,7 +100,7 @@ Eigen::Vector3d t_w_curr(0, 0, 0);//动态长度double型列向量
 double para_q[4] = {0, 0, 0, 1};//实部为序号4,这是一个没有任何旋转的四元数
 double para_t[3] = {0, 0, 0};
 
-//给R和t赋予初值,同时二者还是全局变量
+//给R和t赋予初值,同时二者还是全局变量,全局变量导致上一祯推导出的结果直接用于当前祯，全局变量可以当成反射镜子去理解
 Eigen::Map<Eigen::Quaterniond> q_last_curr(para_q);
 Eigen::Map<Eigen::Vector3d> t_last_curr(para_t);
 
@@ -117,26 +117,26 @@ void TransformToStart(PointType const *const pi, PointType *const po)
 {
     //interpolation ratio
     double s;
-    //因为DISTORTION一直是0，所以s一直是1；之所以一直是0，是因为kitti已经将畸变去除掉了
+    //***kitti将所有点云转移到祯结尾，所以s才一直是1***
     if (DISTORTION)
         s = (pi->intensity - int(pi->intensity)) / SCAN_PERIOD; //每一帧点云占据整个扫描周期的时间比例
     else
-        s = 1.0;
-    // 下面可以理解成，将当前祯的点云投影到这一祯的起始时刻
-    // 这里相当于一个匀速模型假设，将位姿分解成为旋转和平移
-    //std::cout<<"(pi->intensity - int(pi->intensity)) / SCAN_PERIOD="<<(pi->intensity - int(pi->intensity)) / SCAN_PERIOD<<std::endl;//demo，s是变化的
-                  
-    //std::cout<<"s的数值="<<s<<std::endl;//demo 恒为1
-    
+        s = 1.0;   //s = 1  说明全部补偿到点云结束的时刻
     Eigen::Quaterniond q_point_last = Eigen::Quaterniond::Identity().slerp(s, q_last_curr);
+    //q_last_curr和t_last_curr为上一帧激光里程计计算出的帧间相对运动
+    /**人并不是很喜欢这种匀速运动假设的去点云畸变方法，即使假设激光雷达满足匀速运动假设，
+     * 若上一帧激光里程计的帧间相对运动估计误差较大，则会影响这一帧的点云去畸变效果，
+     * 则又会进一步影响这一帧的激光里程计相对运动估计*/
+    /*因为上述原因，所以会：
+       利用IMU积分出的位姿来插值每一个激光雷达扫描点扫描处相对于该帧点云起始处的相对位姿，
+       并恢复出该点在该帧点云起始处坐标系下的位置*/
+    /*但是将位姿转移到起始位置时候，会导致实时性较差，始终是在时间上面是滞后的，不如转移到结束时刻位姿优化的要好*/
     //将上一祯的结果用在本祯来去畸变，这是一个匀速模型的假设，但是在实际车上，这个模型较为实用。但是手持有设备。就会显得不是很实用
     //s为0时，结果为Identity(),为1时;
     Eigen::Vector3d t_point_last = s * t_last_curr;
-
     Eigen::Vector3d point(pi->x, pi->y, pi->z);
-    Eigen::Vector3d un_point = q_point_last * point + t_point_last;
-
-    po->x = un_point.x();//undistortion。所以un表示不失真的
+    Eigen::Vector3d un_point = q_point_last * point + t_point_last;//t_point_last==0.175067左侧始终是这个数值
+    po->x = un_point.x();//undistortion，所以un表示不失真的
     po->y = un_point.y();
     po->z = un_point.z();
     po->intensity = pi->intensity;
@@ -151,7 +151,8 @@ void TransformToEnd(PointType const *const pi, PointType *const po)
     TransformToStart(pi, &un_point_tmp);//转到祯起始时刻坐标系下的点
 
     Eigen::Vector3d un_point(un_point_tmp.x, un_point_tmp.y, un_point_tmp.z);
-    Eigen::Vector3d point_end = q_last_curr.inverse() * (un_point - t_last_curr);
+    Eigen::Vector3d point_end = q_last_curr.inverse() * (un_point - t_last_curr);//(un_point - t_last_curr)得出的是平移
+    //旋转矩阵的四元数的 inverse（取逆）和取转置，结果是一样的,因为旋转矩阵是正交矩阵
     //**重要q_last_curr，t_last_curr 上一祯起始时刻转到上一祯结束时刻的旋转和平移，un_point相当于是旋转的起始点位置
     //通过代码想反推公式是本末倒置的
 
@@ -225,7 +226,7 @@ int main(int argc, char **argv)
     ros::Publisher pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/velodyne_cloud_3", 100);
 
     ros::Publisher pubLaserOdometry = nh.advertise<nav_msgs::Odometry>("/laser_odom_to_init", 100);
-
+    //这个topic name就是在告诉我们，里程计是相对于一开始的init的位姿变换
     ros::Publisher pubLaserPath = nh.advertise<nav_msgs::Path>("/laser_odom_path", 100);
 
     nav_msgs::Path laserPath;
@@ -333,9 +334,14 @@ int main(int argc, char **argv)
                      //std::cout<<"输出cornerPointsSharpNum="<<cornerPointsSharpNum<<std::endl;//demo value=const 192
                     for (int i = 0; i < cornerPointsSharpNum; ++i)                    
                     {
-                        //**重要；随着当前祯的点云的增加，逐渐投影到前一祯时间的结尾，投影方式按照上一祯的R(k)和t(k)进行投影，
+                        //**重要；随着当前祯的点云增加，逐渐投影到前一祯时间的结尾，投影方式按照上一祯的R(k)和t(k)进行投影，
                         //**当得出当前祯整体旋转位姿的R(k+1),t(k+1)后，再和前一祯相乘就能得出当前祯(k+1时刻)的旋转位姿。
-                        TransformToStart(&(cornerPointsSharp->points[i]), &pointSel);//调用时取地址符，那么原函数一定是指针
+                        // TransformToStart(&(cornerPointsSharp->points[i]), &pointSel);//调用时取地址符，那么原函数一定是指针
+                        // std::cout<<"(cornerPointsSharp->points[i]):"
+                        //          << (cornerPointsSharp->points[i])
+                        //          <<"\n                      pointSel:"
+                        //          <<pointSel<<std::endl;
+                        //**函数TransformToStart在实际过程中是【起作用】了，因为上面代码打印出来的数值是不同的
                         //上面不仅仅是运动畸变的去除，还是将【当前祯】的所有点投影到该祯起始start的位置
                         //答：kitti数据集里已经是去除畸变的
                         //对当前祯运动畸变的补偿,pointSel是起始时刻的角点,是任意的么？
@@ -452,9 +458,9 @@ int main(int argc, char **argv)
                             //下面的cost_function是指针的名称而已，类型是ceres::CostFunction的指针
                             ceres::CostFunction* cost_function = LidarEdgeFactor::Create(curr_point, last_point_a, last_point_b, s);
                             //上面是通用模板库？，构建求解非线性最小二乘的方程，上面函数是为了构建线点的约束和优化
-                            std::cout<<"Before Output para_q="<<para_q<<std::endl;
+
                             problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
-                            std::cout<<"After  Output para_q="<<para_q<<std::endl;
+        
                             //输入cost_function loss_function 得出para_q-和para_t-的计算结果
                             corner_correspondence++;//用来起到计数的作用
                         }
@@ -558,6 +564,7 @@ int main(int argc, char **argv)
                                     s = (surfPointsFlat->points[i].intensity - int(surfPointsFlat->points[i].intensity)) / SCAN_PERIOD;
                                 else
                                     s = 1.0;
+                                    //下面的s与kdtree里面的s是解耦的，kdtree纯粹为解决寻找最近点，找完以后，并没有改变对应点的实际位置
                                 ceres::CostFunction *cost_function = LidarPlaneFactor::Create(curr_point, last_point_a, last_point_b, last_point_c, s);
                                 problem.AddResidualBlock(cost_function, loss_function, para_q, para_t);
                                 plane_correspondence++;
@@ -572,7 +579,7 @@ int main(int argc, char **argv)
                     {
                         printf("less correspondence! *************************************************\n");
                     }
-                 //调用ceres求解器
+                    //调用ceres求解器
                     TicToc t_solver;
                     ceres::Solver::Options options;
                     options.linear_solver_type = ceres::DENSE_QR;//
@@ -586,10 +593,14 @@ int main(int argc, char **argv)
                     printf("solver time %f ms \n", t_solver.toc());//求解器求解时间3ms
                 }
                 printf("optimization twice time %f \n", t_opt.toc());//前端里程计优化求解的时间
-                //**重要，更新R和t，旋转和平移.得出的是，当前祯相对于上一祯的位姿变化
-                t_w_curr = t_w_curr + q_w_curr * t_last_curr;//t_w_curr为原矩阵t,t_last_curr为平移转换矩阵
-                q_w_curr = q_w_curr * q_last_curr;           //q_w_curr为原矩阵R,q_last_curr为转移矩阵
-            }   //最顶层的if else开始的
+                    // **重要，更新R和t，旋转和平移.得出的是，当前祯相对于上一祯的位姿变化；
+                    // q_w_curr、t_w_curr是累乘的结果数值（其结果的位姿是相对于odom原点的）；
+                    //每次更新的是等号右侧的q_w_curr，结合以往的位姿更新等号右侧q_w_curr
+                t_w_curr = t_w_curr + q_w_curr * t_last_curr;
+                    //t_w_curr为原矩阵t,t_last_curr为平移转换矩阵,t_w_curr一直是正值。得到【odom坐标系的全局】平移变换
+                q_w_curr = q_w_curr * q_last_curr;           
+                    //q_w_curr为原矩阵R,q_last_curr为转移矩阵。得到【odom坐标系的全局】旋转变换
+            }//最顶层的if else开始的
 
             TicToc t_pub;
 
